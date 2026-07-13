@@ -89,7 +89,9 @@ The sidebar's **Connections** section lists every saved DMM profile. Each profil
 
 ## Query workspace
 
-The default zone for any open connection tab. Point-and-click querying against the active DMM connection and dataset — the natural starting point once a connection is selected. (Multi-term search is broken out into its own zone for compound/AND-style lookups across several terms at once.)
+The default zone for any open connection tab. Point-and-click querying against the active DMM connection and dataset — the natural starting point once a connection is selected.
+
+Zone and tab state (typed queries, results, scroll position) is preserved when you switch away and back — see [Pane caching](#pane-caching-and-privacy-mode) below.
 
 ---
 
@@ -97,16 +99,32 @@ The default zone for any open connection tab. Point-and-click querying against t
 
 Script Studio is a faithful port of the original TQNN IDE's panel system. It's where you build, test, and export interactive HTML/JS tools that talk to DMM directly from the browser sandbox, using the **currently active Workbench connection's** credentials (not separately entered ones).
 
-**Built-in panels:**
+**Built-in (core) panels:**
 
 | Panel | Purpose |
 |---|---|
 | 🟢 Store Document | Store a document/record into the DMM associative memory |
-| 🔵 Search Document | Single or multi-term search against the DMM |
+| 🔵 Search Document | Single-term search against the DMM |
 | 🟠 PQR Encrypt | Preview the Self-Salting PQR token hashing (`tqnn_token16`) for a given input |
-| 🟣 Multi-Term Search | Compound/AND term search patterns |
+| 🟣 Multi-Term Search | Compound/AND term search across several plain-text terms, with optional PQR + FPD |
 | 🟡 Claude RAG | Two-step retrieval-augmented panel — see below |
 | 🟣 README | In-app panel documentation |
+
+> **Note on Multi-Term Search:** as of v1.0.3 this is a core Script Studio panel, not a separate top-level zone. The original standalone `multiterm.js` zone had no reachable nav entry and has been retired — its functionality now lives entirely in the Multi-Term Search core panel above, built on the same shared API layer as every other panel. If you're looking for the old dedicated Multi-Term Search zone from earlier builds, this panel is its replacement.
+
+**Every core panel is a self-contained HTML+JS blob built on `window.DmmApi`** (the same shared API layer `js/core/api.js` exposes to the rest of the app), rather than each panel reinventing its own fetch/FormData/hashing logic. The surface a custom panel can rely on:
+
+| `DmmApi` member | Purpose |
+|---|---|
+| `post(conn, endpoint, fields)` | Raw multipart POST to any DMM endpoint |
+| `searchDoc(conn, pattern, dataset)` | Wraps `POST /v1/searchDoc`, always requests `return_filelist` |
+| `storeDoc(conn, filereference, pattern, dataset, createOts)` | Wraps `POST /v1/storeDoc`, optional OTS timestamp request |
+| `pqrHash(token)` | Self-salting SHA-256 pre-hash of a single ≤16-char token (V1.3.0+ scheme — see [Implementation notes](#pqr-hashing) below) |
+| `pqrHashReversed(token)` | Same, on the reversed token — used for FPD's reverse-hash leg |
+| `parseFilelist(result)` | Splits a `searchDoc`/`multiSearchDoc` newline-delimited filelist into an array |
+| `stripTimestamp(ref)` | Strips DMM's appended write-time timestamp back off a returned filereference |
+
+Drop your own `.js`/`.html`/`.json` source into the Explorer to add a custom panel that calls the same `window.DmmApi` surface — it renders live alongside the built-ins, and gets `window._studio` helpers (`_setStatus`, `_termLog`, `_updateRaw`, `_updateFilelist`) where available, typeof-guarded so a panel degrades gracefully rather than throwing if one isn't present.
 
 **Claude RAG panel** is the standout workflow: it demonstrates DMM as a *pre-selection* layer in front of an LLM.
 
@@ -114,11 +132,10 @@ Script Studio is a faithful port of the original TQNN IDE's panel system. It's w
 2. Optionally click **Fetch Content via MCP** to enrich each matched filereference with its actual content, resolved through the MCP server's `tqnn_get` tool.
 3. **Step 2 — Question for Claude**: ask a question about the matched/enriched documents and click **Ask Claude** — the response streams into the panel with the terminal on the right logging each stage (pre-select → MCP enrichment → Claude call).
 
-**User panels and export:**
+**View / Edit Source, and export:**
 
-- Drop your own `.js`/`.html`/`.json` source into the Explorer to add a custom panel — it renders live alongside the built-ins.
-- Every panel has a **View / Edit Source** toggle so you can inspect or modify the unified HTML+JS behind it.
-- **Export** lets you pick one or more panels and bake the active connection's Base URL and dataset into a **standalone HTML file** — no Workbench required to run it. Useful for demos: hand someone a single `.html` file that already talks to your DMM appliance.
+- Every panel has a **View / Edit Source** toggle so you can inspect or modify the unified HTML+JS behind it. As of v1.0.3, which mode a tab was left in (view vs. edit) is correctly restored when you switch back to it — a tab left mid-edit no longer comes back showing the rendered panel with "Edit Source" still highlighted.
+- **Export** lets you pick one or more panels and bake the active connection's Base URL and dataset into a **standalone HTML file** — no Workbench required to run it. Useful for demos: hand someone a single `.html` file that already talks to your DMM appliance. As of v1.0.3, the exported JS bundle correctly matches only the *checked* panels in the export dialog (previously, every user-authored panel's JS was bundled into every export regardless of selection, which could cause a selected panel's export to throw on load if it referenced DOM elements from an unselected one).
 
 ---
 
@@ -175,9 +192,20 @@ Zones that depend on an MCP connection (like File resolver) are greyed out in th
 
 ---
 
+## Pane caching and Privacy Mode
+
+Two app-wide behaviours worth knowing about, both introduced after v1.0.0:
+
+**Pane caching.** Each open tab keeps its own live DOM subtree per zone rather than the zone being rebuilt from scratch on every switch. Before this, two tabs showing the same zone type (e.g. two Query workspace tabs against different connections) shared one underlying module instance with no isolation, so switching tabs could silently lose typed input. Now, switching away and back reattaches the exact same nodes — typed values, results, terminal output, and scroll position all survive. Module-level state a zone keeps outside the DOM (e.g. Studio's currently-open panel) is snapshotted and restored around the swap so the shared singleton "remembers" which tab it's representing.
+
+**Privacy Mode.** A toggle (see [Settings](#settings)) that masks sensitive connection and MCP endpoint strings wherever they'd otherwise be displayed in the UI. When off, masking is a no-op. Useful for screen-sharing or recording demos without exposing a live appliance's Base URL.
+
+---
+
 ## Settings
 
 - **Appearance** — light/dark theme toggle.
+- **Privacy Mode** — mask connection Base URLs and MCP endpoint strings app-wide. See [Pane caching and Privacy Mode](#pane-caching-and-privacy-mode) above.
 - **Query defaults** — default similarity threshold (token overlap % for `tqnn_similarity` results), default FPD on/off, and max results returned per query. These are used as sensible starting values across zones, not hard limits.
 - **About** — app version and a quick reference for the protocol/security/platform stack in use.
 
@@ -188,15 +216,24 @@ Zones that depend on an MCP connection (like File resolver) are greyed out in th
 - Connection credentials (API key/secret) are stored locally; exported connection files contain them in cleartext, so handle exports like you would a password file.
 - MCP authentication uses OAuth 2.1 with PKCE (S256) rather than static bearer tokens where the server supports it.
 - The app sends `ngrok-skip-browser-warning` on MCP requests purely to bypass ngrok's interstitial page when tunnelling a local appliance — it has no bearing on the OAuth flow itself.
+- Privacy Mode (above) is a *display* masking layer only — it does not change what's sent over the wire, and exported connection files still contain plaintext secrets regardless of the Privacy Mode setting.
+
+---
+
+## Implementation notes
+
+### PQR hashing
+
+Panel-facing PQR hashing (`window.DmmApi.pqrHash`) uses the **self-salting scheme (V1.3.0+)**: the token is hashed, then re-hashed together with a slice of its own first-pass digest, rather than a single static `SHA-256(pad_to_16_chars(token))` pass. If you're cross-referencing against an older integration or a pre-V1.3.0 `tqnn-mcp-server` deployment, confirm which scheme that side expects — a static-hash consumer will not match self-salted output.
 
 ---
 
 ## Version
 
-**Current release: v1.0.0**
+**Current release: v1.0.3**
 
 ```
-DMM Workbench v1.0.0
+DMM Workbench v1.0.3
 TQNN MCP Server: tqnn-dmm v1.4.0
 OAuth 2.1 · RFC 9728 · RFC 8414 · RFC 7591 · PKCE S256
 Electron · macOS (primary target)
@@ -205,6 +242,21 @@ Electron · macOS (primary target)
 ---
 
 ## Changelog
+
+### v1.0.3 — Studio panel refactor
+
+- **Retired the standalone `multiterm.js` zone.** It had no reachable nav entry; its functionality is now the Multi-Term Search core panel inside Script Studio, built on the same `window.DmmApi` surface as every other core panel.
+- Rewrote all five core Script Studio panels (Store, Search, PQR Encrypt, Claude RAG, Multi-Term Search) as self-contained HTML+JS blobs against `window.DmmApi` — see the [DmmApi surface table](#script-studio) for the panel-authoring contract this establishes for custom panels too.
+- Fixed the export pipeline: standalone HTML export now bundles JS only for the panels actually checked in the export dialog, instead of bundling every user-authored panel's JS into every export regardless of selection.
+- Fixed per-tab View/Edit Source mode restoration: a tab left mid-edit and switched away from now correctly shows Edit Source (not the rendered panel) when reattached, instead of desyncing the visible pane from the highlighted button.
+
+### v1.0.1–v1.0.2 — Caching, privacy, connector auth
+
+- PaneCache: per-(tab, zone) DOM caching so switching tabs no longer rebuilds zones from scratch or loses in-progress input — see [Pane caching and Privacy Mode](#pane-caching-and-privacy-mode).
+- Privacy Mode: app-wide masking of sensitive Base URL / MCP endpoint strings in the UI.
+- Resizable Script Studio panels (explorer / output widths persisted).
+- OAuth 2.1 Dynamic Client Registration for the MCP connector.
+- Multi-connection home screen improvements.
 
 ### v1.0.0 — Initial release
 
@@ -217,8 +269,10 @@ Electron · macOS (primary target)
 - Settings zone: theme, similarity threshold, FPD default, max results
 - Self-Salting PQR token hashing (`tqnn_token16`) exposed in-app for preview/testing
 
+> **Note:** the v1.0.0 entry above described Multi-Term Search as its own zone. As of v1.0.3 that zone is retired and the functionality lives in Script Studio's Multi-Term Search core panel instead — see the v1.0.3 entry and the note under [Script studio](#script-studio).
+
 ---
 
 ## License
 
-© 2026 Toridion Ltd, Scarborough, North Yorkshire. See [`LICENSE`](LICENSE) for terms.
+© 2026 Toridion Ltd, Scarborough, North Yorkshire. See [`LICENSE`](LICENSE) for terms, or add one here if this repo is going public without one yet.
