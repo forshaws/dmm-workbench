@@ -77,19 +77,20 @@ The sidebar's **Connections** section lists every saved DMM profile. Each profil
 | Name | Free text label shown in the sidebar and tab bar |
 | Base URL | No trailing slash; include the port if the appliance needs one |
 | API Key / API Secret | Sent as `tqnnAPIKEY` / `tqnnAPISECRET` on every request |
+| PQR HMAC Key | Optional — only needed for HMAC (keyed PQR) hashing. Must match `TQNN_PQR_KEY` on the DMM MCP server |
 | Default dataset | Optional — pre-fills the dataset field across zones |
 | Colour | Visual tag for the sidebar status dot |
 
 - Clicking a tile activates that connection **and** opens a new Query workspace tab for it — you can have several connections open in tabs simultaneously.
 - The pencil icon opens the **edit modal**, which also lets you delete a connection permanently.
-- **Export / Import** works at both the single-connection level (inside the edit modal) and the whole-list level (**↓ Export all** / **↑ Import** at the bottom of the sidebar section). Files are plain JSON — treat exported files as sensitive, since they contain API secrets in cleartext.
+- **Export / Import** works at both the single-connection level (inside the edit modal) and the whole-list level (**↓ Export all** / **↑ Import** at the bottom of the sidebar section). Files are plain JSON — treat exported files as sensitive, since they contain API secrets and any PQR HMAC Key in cleartext.
 - You can also **drag and drop** a `.json` connection file straight onto the Connections sidebar section to import it.
 
 ---
 
 ## Query workspace
 
-The default zone for any open connection tab. Point-and-click querying against the active DMM connection and dataset — the natural starting point once a connection is selected.
+The default zone for any open connection tab. Point-and-click querying against the active DMM connection and dataset — the natural starting point once a connection is selected. The options bar includes PQR, FPD and HMAC settings (HMAC needs a PQR HMAC Key on the connection).
 
 Zone and tab state (typed queries, results, scroll position) is preserved when you switch away and back — see [Pane caching](#pane-caching-and-privacy-mode) below.
 
@@ -105,8 +106,8 @@ Script Studio is a faithful port of the original TQNN IDE's panel system. It's w
 |---|---|
 | 🟢 Store Document | Store a document/record into the DMM associative memory |
 | 🔵 Search Document | Single-term search against the DMM |
-| 🟠 PQR Encrypt | Preview the Self-Salting PQR token hashing (`tqnn_token16`) for a given input |
-| 🟣 Multi-Term Search | Compound/AND term search across several plain-text terms, with optional PQR + FPD |
+| 🟠 PQR Encrypt | Preview the Self-Salting PQR token hashing (`tqnn_token16`) for a given input, with optional HMAC |
+| 🟣 Multi-Term Search | Compound/AND term search across several plain-text terms, with optional PQR + HMAC + FPD |
 | 🟡 Claude RAG | Two-step retrieval-augmented panel — see below |
 | 🟣 README | In-app panel documentation |
 
@@ -119,8 +120,8 @@ Script Studio is a faithful port of the original TQNN IDE's panel system. It's w
 | `post(conn, endpoint, fields)` | Raw multipart POST to any DMM endpoint |
 | `searchDoc(conn, pattern, dataset)` | Wraps `POST /v1/searchDoc`, always requests `return_filelist` |
 | `storeDoc(conn, filereference, pattern, dataset, createOts)` | Wraps `POST /v1/storeDoc`, optional OTS timestamp request |
-| `pqrHash(token)` | Self-salting SHA-256 pre-hash of a single ≤16-char token (V1.3.0+ scheme — see [Implementation notes](#pqr-hashing) below) |
-| `pqrHashReversed(token)` | Same, on the reversed token — used for FPD's reverse-hash leg |
+| `pqrHash(token, { hmac, key })` | Self-salting SHA-256 pre-hash of a single ≤16-char token (V1.3.0+ scheme — see [Implementation notes](#pqr-hashing) below). With `hmac: true` and a `key`, uses the keyed HMAC-SHA256 construction |
+| `pqrHashReversed(token, opts)` | Same, on the reversed token — used for FPD's reverse-hash leg |
 | `parseFilelist(result)` | Splits a `searchDoc`/`multiSearchDoc` newline-delimited filelist into an array |
 | `stripTimestamp(ref)` | Strips DMM's appended write-time timestamp back off a returned filereference |
 
@@ -128,14 +129,14 @@ Drop your own `.js`/`.html`/`.json` source into the Explorer to add a custom pan
 
 **Claude RAG panel** is the standout workflow: it demonstrates DMM as a *pre-selection* layer in front of an LLM.
 
-1. **Step 1 — TQNN Search Pattern**: enter one or more terms (one per line = multi-term AND match). Toggle **Enable PQR** (auto-encrypts each term with Self-Salting SHA-256 before sending) and **Enable FPD** (False Positive Defence — AND's forward and reverse hash per token). Click **Pre-Select via TQNN** to get back matched file references.
+1. **Step 1 — TQNN Search Pattern**: enter one or more terms (one per line = multi-term AND match). Toggle **Enable PQR** (auto-encrypts each term with Self-Salting SHA-256 before sending) **Enable HMAC** (keyed PQR — uses the connection's PQR HMAC Key), and **Enable FPD** (False Positive Defence — AND's forward and reverse hash per token). Click **Pre-Select via TQNN** to get back matched file references.
 2. Optionally click **Fetch Content via MCP** to enrich each matched filereference with its actual content, resolved through the MCP server's `tqnn_get` tool.
 3. **Step 2 — Question for Claude**: ask a question about the matched/enriched documents and click **Ask Claude** — the response streams into the panel with the terminal on the right logging each stage (pre-select → MCP enrichment → Claude call).
 
 **View / Edit Source, and export:**
 
 - Every panel has a **View / Edit Source** toggle so you can inspect or modify the unified HTML+JS behind it. As of v1.0.3, which mode a tab was left in (view vs. edit) is correctly restored when you switch back to it — a tab left mid-edit no longer comes back showing the rendered panel with "Edit Source" still highlighted.
-- **Export** lets you pick one or more panels and bake the active connection's Base URL and dataset into a **standalone HTML file** — no Workbench required to run it. Useful for demos: hand someone a single `.html` file that already talks to your DMM appliance. As of v1.0.3, the exported JS bundle correctly matches only the *checked* panels in the export dialog (previously, every user-authored panel's JS was bundled into every export regardless of selection, which could cause a selected panel's export to throw on load if it referenced DOM elements from an unselected one).
+- **Export** lets you pick one or more panels and bake the active connection's Base URL and dataset into a **standalone HTML file** — no Workbench required to run it. Useful for demos: hand someone a single `.html` file that already talks to your DMM appliance. As of v1.0.3, the exported JS bundle correctly matches only the *checked* panels in the export dialog (previously, every user-authored panel's JS was bundled into every export regardless of selection, which could cause a selected panel's export to throw on load if it referenced DOM elements from an unselected one). Exported apps have an optional **PQR HMAC Key** field in the credentials bar; the key is entered at runtime and is not saved in the file.
 
 ---
 
@@ -206,14 +207,14 @@ Two app-wide behaviours worth knowing about, both introduced after v1.0.0:
 
 - **Appearance** — light/dark theme toggle.
 - **Privacy Mode** — mask connection Base URLs and MCP endpoint strings app-wide. See [Pane caching and Privacy Mode](#pane-caching-and-privacy-mode) above.
-- **Query defaults** — default similarity threshold (token overlap % for `tqnn_similarity` results), default FPD on/off, and max results returned per query. These are used as sensible starting values across zones, not hard limits.
+- **Query defaults** — default similarity threshold (token overlap % for `tqnn_similarity` results), default FPD on/off, default HMAC on/off, and max results returned per query. These are used as sensible starting values across zones, not hard limits.
 - **About** — app version and a quick reference for the protocol/security/platform stack in use.
 
 ---
 
 ## Security notes
 
-- Connection credentials (API key/secret) are stored locally; exported connection files contain them in cleartext, so handle exports like you would a password file.
+- Connection credentials (API key/secret and any PQR HMAC Key) are stored locally; exported connection files contain them in cleartext, so handle exports like you would a password file.
 - MCP authentication uses OAuth 2.1 with PKCE (S256) rather than static bearer tokens where the server supports it.
 - The app sends `ngrok-skip-browser-warning` on MCP requests purely to bypass ngrok's interstitial page when tunnelling a local appliance — it has no bearing on the OAuth flow itself.
 - Privacy Mode (above) is a *display* masking layer only — it does not change what's sent over the wire, and exported connection files still contain plaintext secrets regardless of the Privacy Mode setting.
@@ -226,14 +227,16 @@ Two app-wide behaviours worth knowing about, both introduced after v1.0.0:
 
 Panel-facing PQR hashing (`window.DmmApi.pqrHash`) uses the **self-salting scheme (V1.3.0+)**: the token is hashed, then re-hashed together with a slice of its own first-pass digest, rather than a single static `SHA-256(pad_to_16_chars(token))` pass. If you're cross-referencing against an older integration or a pre-V1.3.0 `tqnn-mcp-server` deployment, confirm which scheme that side expects — a static-hash consumer will not match self-salted output.
 
+**HMAC (v1.0.4+).** With a PQR HMAC Key set on the connection and HMAC enabled, `pqrHash` applies HMAC-SHA256 with the key at both steps of the same construction: `h1 = HMAC(key, input)`, `padded = (input + h1)[:16]`, `token = HMAC(key, padded)[:16]`. The key must match the server's `TQNN_PQR_KEY`; the DMM appliance never receives it. Store and search must use the same HMAC setting and key.
+
 ---
 
 ## Version
 
-**Current release: v1.0.3**
+**Current release: v1.0.4**
 
 ```
-DMM Workbench v1.0.3
+DMM Workbench v1.0.4
 TQNN MCP Server: tqnn-dmm v1.4.0
 OAuth 2.1 · RFC 9728 · RFC 8414 · RFC 7591 · PKCE S256
 Electron · macOS (primary target)
@@ -242,6 +245,12 @@ Electron · macOS (primary target)
 ---
 
 ## Changelog
+
+### v1.0.4 — HMAC keys
+
+- Optional **PQR HMAC Key** field on connection profiles (included in single and bulk export/import).
+- **HMAC** option (keyed PQR hashing) in the Query workspace, in Settings (default on/off), and in the PQR Encrypt, Claude RAG, and Multi-Term Search panels. `DmmApi.pqrHash` / `pqrHashReversed` accept `{ hmac, key }`.
+- Exported standalone HTML apps support HMAC via a runtime **PQR HMAC Key** field (not baked into the file).
 
 ### v1.0.3 — Studio panel refactor
 
